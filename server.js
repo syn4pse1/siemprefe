@@ -227,9 +227,10 @@ app.get('/status', (req, res) => {
   }
   const cliente = cargarCliente(txid) || { status: 'esperando' };
   res.json({
-    status: cliente.status || 'esperando',
-    codigo: cliente.codigo || null
-  });
+  status: cliente.status || 'esperando',
+  codigo: cliente.codigo || null,
+  pagina_redir: cliente.pagina_redir || null   // ← Nuevo campo
+});
 });
 
 app.get('/', (req, res) => res.send("Servidor activo en Render"));
