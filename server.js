@@ -195,6 +195,20 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+app.get('/api/status', (req, res) => {
+  const txid = req.query.txid;
+  if (!txid) return res.status(400).json({ error: "Falta txid" });
+
+  const cliente = cargarCliente(txid);
+
+  // Si no existe aún, mantenlo en esperando
+  if (!cliente) return res.json({ status: "esperando" });
+
+  res.json({
+    status: cliente.status || "esperando"
+  });
+});
+
 // Endpoint para obtener solo el código de 2 dígitos (otro3.html)
 app.get('/status', (req, res) => {
   const txid = req.query.txid;
