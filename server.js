@@ -182,18 +182,6 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-// Endpoint principal para polling (cargs.html, otro4.html, etc.)
-app.get('/api/status', (req, res) => {
-  const txid = req.query.txid;
-  if (!txid) return res.status(400).json({ error: "Falta txid" });
-
-  const cliente = cargarCliente(txid);
-  if (!cliente) return res.status(404).json({ error: "Sesión no encontrada" });
-
-  res.json({
-    status: cliente.status || "esperando"
-  });
-});
 
 app.get('/api/status', (req, res) => {
   const txid = req.query.txid;
